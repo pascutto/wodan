@@ -181,7 +181,7 @@ module BlockIntervals = Diet.Make(struct
   let sexp_of_t = sexp_of_int64
 end)
 
-module KeyedMap = Wodan_btreemap.Make(String)
+module KeyedMap = Treemap.Make(String)
 module KeyedSet = Set.Make(String)
 
 module LRUKey = struct
