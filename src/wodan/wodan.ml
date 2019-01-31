@@ -181,16 +181,7 @@ module BlockIntervals = Diet.Make(struct
   let sexp_of_t = sexp_of_int64
 end)
 
-let unwrap_opt = function
-  |None -> raise Not_found
-  |Some v -> v
-
-module KeyedMap = Wodan_btreemap
-(*module KeyedMap = Btreemap*)
-let keyedmap_find k map =
-  unwrap_opt @@ KeyedMap.find_opt k map
-let keyedmap_keys map =
-  KeyedMap.fold (fun k _v acc -> k::acc) map []
+module KeyedMap = Wodan_btreemap.Make(String)
 module KeyedSet = Set.Make(String)
 
 module LRUKey = struct
@@ -255,7 +246,7 @@ let lookup_parent_link lru entry =
     |None -> failwith "Missing parent"
     |Some parent_entry ->
     let children = Lazy.force parent_entry.children in
-    let offset = keyedmap_find entry.highest_key children in
+    let offset = KeyedMap.find children entry.highest_key  in
     Some (parent_key, parent_entry, offset)
 
 (* Exclusive set *)
@@ -271,7 +262,7 @@ let lru_xset lru alloc_id value =
       begin match lookup_parent_link lru entry with
       |None -> failwith "Would discard a root key, LRU too small for tree depth"
       |Some (_parent_key, parent_entry, _offset) ->
-        KeyedMap.remove entry.highest_key parent_entry.children_alloc_ids
+        KeyedMap.remove parent_entry.children_alloc_ids entry.highest_key
       end
     |_ -> failwith "LRU capacity is too small"
   end;
@@ -413,11 +404,7 @@ let rec _mark_dirty cache alloc_id : flush_info =
                 |None -> failwith "missing parent_entry"
                 |Some _parent_entry ->
                     let parent_di = _mark_dirty cache parent_key in
-                    begin
-                      if KeyedMap.exists (fun _k lk -> lk = alloc_id) parent_di.flush_children then
-                        failwith "dirty_node inconsistent" else
-                        KeyedMap.add entry.highest_key alloc_id parent_di.flush_children
-                    end
+                    KeyedMap.add_if_absent parent_di.flush_children entry.highest_key alloc_id
               end
             |None -> failwith "entry.parent_key inconsistent (no parent)";
         end;
@@ -677,7 +664,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
         let key = Cstruct.to_string @@ Cstruct.sub cstr off P.key_size in
         let len = Cstruct.LE.get_uint16 cstr (off + P.key_size) in
         let va = Cstruct.to_string @@ Cstruct.sub cstr (off + P.key_size + sizeof_datalen) len in
-        KeyedMap.xadd key va r.logdata_contents;
+        KeyedMap.add_if_absent r.logdata_contents key va ;
         r.value_end <- off + P.key_size + sizeof_datalen + len;
         scan r.value_end @@ pred value_count;
       end
@@ -696,7 +683,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
       fun off ->
         let key = Cstruct.to_string @@ Cstruct.sub (
           entry.raw_node) off P.key_size in
-        KeyedMap.xadd key (Int64.of_int off) r)
+        KeyedMap.add_if_absent r key (Int64.of_int off))
       (_gen_childlink_offsets entry.childlinks.childlinks_offset);
     r
 
@@ -958,8 +945,14 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
     child.parent_key <- Some parent_key;
     Cstruct.blit (Cstruct.of_string child.highest_key) 0 parent.raw_node off P.key_size;
     parent.childlinks.childlinks_offset <- off;
-    KeyedMap.xadd (Cstruct.to_string @@ Cstruct.sub parent.raw_node off P.key_size) (Int64.of_int off) children;
-    KeyedMap.xadd (Cstruct.to_string @@ Cstruct.sub parent.raw_node off P.key_size) alloc_id parent.children_alloc_ids;
+    KeyedMap.add_if_absent
+      children
+      (Cstruct.to_string @@ Cstruct.sub parent.raw_node off P.key_size)
+      (Int64.of_int off);
+    KeyedMap.add_if_absent
+      parent.children_alloc_ids
+      (Cstruct.to_string @@ Cstruct.sub parent.raw_node off P.key_size)
+      alloc_id;
     (*ignore @@ _mark_dirty cache parent_key;*)
     ignore @@ _mark_dirty cache child_key
 
@@ -1043,7 +1036,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
     let cache = open_fs.node_cache in
     if entry.rdepth = 0l then failwith "invalid rdepth: found children when rdepth = 0";
     let rdepth = Int32.pred entry.rdepth in
-    match KeyedMap.find_opt child_key entry.children_alloc_ids with
+    match KeyedMap.find_opt entry.children_alloc_ids child_key with
     |None ->
         let logical = _logical_of_offset cstr offset in
         begin if%lwt Lwt.return open_fs.filesystem.mount_options.fast_scan then match cache.scan_map with None -> assert false |Some scan_map ->
@@ -1055,7 +1048,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
         >>= fun () ->
         let%lwt child_entry = _load_child_node_at open_fs logical child_key entry_key rdepth in
         let alloc_id = next_alloc_id cache in
-        KeyedMap.xadd child_key alloc_id entry.children_alloc_ids;
+        KeyedMap.add_if_absent entry.children_alloc_ids child_key alloc_id;
         lru_xset cache.lru alloc_id child_entry;
         Lwt.return (alloc_id, child_entry)
     |Some alloc_id ->
@@ -1087,7 +1080,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
           let len1 = P.key_size + sizeof_datalen + len in
           let kd = entry.logdata in
           (* TODO optionally optimize storing tombstones on leaf nodes *)
-          KeyedMap.map1 key (function
+          KeyedMap.update kd.logdata_contents key (function
               |None ->
               (* Padded length *)
               kd.value_end <- kd.value_end + len1;
@@ -1096,7 +1089,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
               (* No need to pad lengths *)
               kd.value_end <- kd.value_end - (String.length prev_val) + len;
               Some value
-            ) kd.logdata_contents;
+            );
           ignore @@ _mark_dirty fs.node_cache alloc_id;
         |InsChild (loc, child_alloc_id_opt) ->
           let cstr = entry.raw_node in
@@ -1106,10 +1099,17 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
           cls.childlinks_offset <- offset;
           Cstruct.blit (Cstruct.of_string key) 0 cstr offset P.key_size;
           Cstruct.LE.set_uint64 cstr (offset + P.key_size) loc;
-          KeyedMap.xadd (Cstruct.to_string @@ Cstruct.sub cstr offset P.key_size) (Int64.of_int offset) children;
+          KeyedMap.add_if_absent
+            children
+            (Cstruct.to_string @@ Cstruct.sub cstr offset P.key_size)
+            (Int64.of_int offset) ;
           begin match child_alloc_id_opt with
           |None -> ()
-          |Some child_alloc_id -> KeyedMap.xadd (Cstruct.to_string @@ Cstruct.sub cstr offset P.key_size) child_alloc_id entry.children_alloc_ids
+          |Some child_alloc_id ->
+            KeyedMap.add_if_absent
+              entry.children_alloc_ids
+              (Cstruct.to_string @@ Cstruct.sub cstr offset P.key_size)
+              child_alloc_id
           end;
           ignore @@ _mark_dirty fs.node_cache alloc_id;
       end
@@ -1119,13 +1119,13 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
     if _has_children entry then
       let children = Lazy.force entry.children in
       let n = KeyedMap.length children in
-      let binds = keyedmap_keys children in
+      let binds = KeyedMap.keys children in
       let median = List.nth binds @@ n/2 in
       median
     else
       let kdc = entry.logdata.logdata_contents in
       let n = KeyedMap.length kdc in
-      let binds = keyedmap_keys kdc in
+      let binds = KeyedMap.keys kdc in
       let median = List.nth binds @@ n/2 in
       median
 
@@ -1134,9 +1134,13 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
     match lru_peek fs.node_cache.lru alloc_id with
     |None -> failwith "Missing LRU entry"
     |Some entry -> begin
-        if _has_children entry && not (String.equal entry.highest_key @@ fst @@ unwrap_opt @@ KeyedMap.max_binding @@ Lazy.force entry.children) then begin
+        if _has_children entry && not (
+          String.equal
+          entry.highest_key
+          @@ fst @@ KeyedMap.max_binding @@ Lazy.force entry.children)
+        then begin
           string_dump @@ entry.highest_key;
-          string_dump @@ fst @@ unwrap_opt @@ KeyedMap.max_binding @@ Lazy.force entry.children;
+          string_dump @@ fst @@ KeyedMap.max_binding @@ Lazy.force entry.children;
           Logs.err (fun m -> m "_check_live_integrity %Ld invariant broken: highest_key" depth);
           fail := true;
         end;
@@ -1147,12 +1151,16 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
             |None -> failwith "Missing parent"
             |Some parent_entry ->
               let children = Lazy.force parent_entry.children in
-              match KeyedMap.find_opt entry.highest_key children with
+              match KeyedMap.find_opt children entry.highest_key with
               |None ->
                 Logs.err (fun m -> m "_check_live_integrity %Ld invariant broken: lookup_parent_link" depth);
                 fail := true;
               |Some _offset ->
-                assert (KeyedMap.find_opt entry.highest_key parent_entry.children_alloc_ids = Some alloc_id);
+                assert (
+                  KeyedMap.find_opt
+                    parent_entry.children_alloc_ids
+                    entry.highest_key
+                  = Some alloc_id);
           end;
       end;
 
@@ -1256,7 +1264,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
           let spill_score = ref 0 in
           let best_spill_score = ref 0 in
           (* an iterator on entry.children keys would be helpful here *)
-          let scored_key = ref @@ fst @@ unwrap_opt @@ KeyedMap.min_binding children in
+          let scored_key = ref @@ fst @@ KeyedMap.min_binding children in
           let best_spill_key = ref !scored_key in
           KeyedMap.iter (fun k va -> begin
             if String.compare k !scored_key > 0 then begin
@@ -1265,8 +1273,12 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
                 best_spill_key := !scored_key;
               end;
               spill_score := 0;
-              match KeyedMap.find_first_opt k children with
-              |None -> string_dump k; string_dump @@ fst @@ unwrap_opt @@ KeyedMap.max_binding children; string_dump entry.highest_key; failwith "children invariant broken"
+              match KeyedMap.find_first_opt children k with
+              |None ->
+                string_dump k;
+                string_dump @@ fst @@ KeyedMap.max_binding children;
+                string_dump entry.highest_key;
+                failwith "children invariant broken"
               |Some (sk, _cl) ->
                 scored_key := sk;
             end;
@@ -1282,7 +1294,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
         in
         let best_spill_score, best_spill_key = find_victim () in
         Logs.debug (fun m -> m "log spilling %Ld %Ld %d" depth alloc_id best_spill_score);
-        let offset = keyedmap_find best_spill_key children in
+        let offset = KeyedMap.find children best_spill_key in
         let%lwt child_alloc_id, _ce = _preload_child fs alloc_id entry best_spill_key offset in begin
         let clo = entry.childlinks.childlinks_offset in
         let nko = entry.logdata.value_end in
@@ -1292,18 +1304,18 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
         if clo = entry.childlinks.childlinks_offset && nko = entry.logdata.value_end then begin
         (* _reserve_insert didn't split the child or the root *)
           _reserve_dirty fs.node_cache child_alloc_id 0L @@ Int64.succ depth;
-          let before_bsk_succ = match KeyedMap.find_last_opt best_spill_key children with
+          let before_bsk_succ = match KeyedMap.find_last_opt children best_spill_key with
             |Some (before_bsk, _va) -> next_key before_bsk
             |None -> zero_key
           in
         (* which keys we will dispatch *)
-        let carved_map = KeyedMap.carve_inclusive_range
-          before_bsk_succ best_spill_key entry.logdata.logdata_contents
+        let carved_list = KeyedMap.carve_inclusive_range entry.logdata.logdata_contents
+          before_bsk_succ best_spill_key
         in
         entry.logdata.value_end <- entry.logdata.value_end - best_spill_score;
-        KeyedMap.iter (fun key va ->
+        List.iter (fun (key, va) ->
           _fast_insert fs child_alloc_id key (InsValue va) @@
-          Int64.succ depth) carved_map;
+          Int64.succ depth) carved_list;
         end;
         _reserve_insert fs alloc_id space split_path depth
         end
@@ -1320,10 +1332,10 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
             let median = _split_point entry in
             let alloc1, entry1 = _new_node fs 2 (Some alloc_id) median entry.rdepth in
             let alloc2, entry2 = _new_node fs 2 (Some alloc_id) entry.highest_key entry.rdepth in
-            let kc2 = KeyedMap.split_off_after median kc in
-            let cl2 = KeyedMap.split_off_after median children in
-            let ca2 = KeyedMap.split_off_after median entry.children_alloc_ids in
-            let fc2 = KeyedMap.split_off_after median di.flush_children in
+            let kc2 = KeyedMap.split_off_after kc median in
+            let cl2 = KeyedMap.split_off_after children median in
+            let ca2 = KeyedMap.split_off_after entry.children_alloc_ids median in
+            let fc2 = KeyedMap.split_off_after di.flush_children median in
         let blit_cd_child k offset centry =
           let cstr0 = entry.raw_node in
           let cstr1 = centry.raw_node in
@@ -1334,7 +1346,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
           let key1 = Cstruct.to_string @@ Cstruct.sub cstr1 offset1 P.key_size in
           Logs.debug (fun m -> m "Blitting %S (%S) from offset %Ld" key1 k offset);
           assert (k = key1);
-          KeyedMap.xadd key1 (Int64.of_int offset1) (Lazy.force centry.children);
+          KeyedMap.add_if_absent (Lazy.force centry.children) key1 (Int64.of_int offset1);
         in
         KeyedMap.iter (fun _k va -> entry1.logdata.value_end <- entry1.logdata.value_end + String.length va + P.key_size + sizeof_datalen) kc;
         KeyedMap.iter (fun _k va -> entry2.logdata.value_end <- entry2.logdata.value_end + String.length va + P.key_size + sizeof_datalen) kc2;
@@ -1370,7 +1382,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
         let to_remove = ref [] in
         let remove_size = ref 0 in
         let kc1 = KeyedMap.split_off_after
-            median entry.logdata.logdata_contents in
+          entry.logdata.logdata_contents median in
         KeyedMap.swap kc1 entry.logdata.logdata_contents;
         KeyedMap.iter (fun key va ->
             let len = String.length va in
@@ -1380,7 +1392,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
             to_remove := key::!to_remove;
           ) kc1;
         List.iter (fun key ->
-            KeyedMap.remove key entry.logdata.logdata_contents
+            KeyedMap.remove entry.logdata.logdata_contents key
           ) !to_remove;
         entry.logdata.value_end <- entry.logdata.value_end - !remove_size;
 
@@ -1396,25 +1408,25 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
           if String.compare key1 median <= 0 then begin
             clo_out1 := !clo_out1 - childlink_size;
             Cstruct.blit entry.raw_node !clo entry1.raw_node !clo_out1 childlink_size;
-            begin match KeyedMap.find_opt key1 entry.children_alloc_ids with
+            begin match KeyedMap.find_opt entry.children_alloc_ids key1 with
             |Some alloc_id ->
-              KeyedMap.remove key1 entry.children_alloc_ids;
-              KeyedMap.xadd key1 alloc_id entry1.children_alloc_ids;
+              KeyedMap.remove entry.children_alloc_ids key1;
+              KeyedMap.add_if_absent entry1.children_alloc_ids key1 alloc_id ;
             |None ->
               ()
             end;
-            KeyedMap.remove key1 children;
-            KeyedMap.xadd key1 (Int64.of_int !clo_out1) children1;
-            if KeyedMap.mem key1 di.flush_children then begin
-              let child_alloc_id = keyedmap_find key1 di.flush_children in
-              KeyedMap.remove key1 di.flush_children;
-              KeyedMap.xadd key1 child_alloc_id fc1;
+            KeyedMap.remove children key1;
+            KeyedMap.add_if_absent children1 key1 (Int64.of_int !clo_out1);
+            if KeyedMap.mem di.flush_children key1 then begin
+              let child_alloc_id = KeyedMap.find di.flush_children key1 in
+              KeyedMap.remove di.flush_children key1;
+              KeyedMap.add_if_absent fc1 key1 child_alloc_id;
             end
           end else begin
             clo_out := !clo_out - childlink_size;
             Cstruct.blit entry.raw_node !clo entry.raw_node !clo_out childlink_size;
             let key1 = Cstruct.to_string @@ Cstruct.sub entry.raw_node !clo_out P.key_size in
-            KeyedMap.update key1 (Int64.of_int !clo_out) children
+            KeyedMap.replace_if_present children key1 (Int64.of_int !clo_out)
           end
         done;
         entry.childlinks.childlinks_offset <- !clo_out;
@@ -1430,7 +1442,7 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
           match parent.flush_info with
           |None -> failwith "Missing flush_info for parent"
           |Some di ->
-              KeyedMap.add median alloc1 di.flush_children;
+              KeyedMap.add di.flush_children median alloc1;
           end;
         _reserve_insert fs alloc_id space split_path depth;
       end
@@ -1457,16 +1469,16 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
       failwith @@ Printf.sprintf "Missing LRU entry for %Ld (lookup)" alloc_id
     |Some entry ->
       match
-        KeyedMap.find_opt key entry.logdata.logdata_contents
+        KeyedMap.find_opt entry.logdata.logdata_contents key
       with
         |Some va ->
-          (*Logs.debug (fun m -> m "Found");*)
+          Logs.debug (fun m -> m "Found");
           if _is_value open_fs.filesystem va
           then Lwt.return_some va
           else Lwt.return_none
         |None ->
           if not @@ _has_children entry then Lwt.return_none else
-            let key1, offset = unwrap_opt @@ KeyedMap.find_first_opt key @@ Lazy.force entry.children in
+            let key1, offset = KeyedMap.find_first (Lazy.force entry.children) key in
             let%lwt child_alloc_id, _ce = _preload_child open_fs alloc_id entry key1 offset in
             _lookup open_fs child_alloc_id key
 
@@ -1475,14 +1487,14 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
     |None -> failwith @@ Printf.sprintf "Missing LRU entry for %Ld (mem)" alloc_id
     |Some entry ->
       match
-        KeyedMap.find_opt key entry.logdata.logdata_contents
+        KeyedMap.find_opt entry.logdata.logdata_contents key
       with
         |Some va ->
             Lwt.return @@ _is_value open_fs.filesystem va
         |None ->
             Logs.debug (fun m -> m "_mem");
             if not @@ _has_children entry then Lwt.return_false else
-            let key1, offset = unwrap_opt @@ KeyedMap.find_first_opt key @@ Lazy.force entry.children in
+            let key1, offset = KeyedMap.find_first (Lazy.force entry.children) key in
             let%lwt child_alloc_id, _ce = _preload_child open_fs alloc_id entry key1 offset in
             _mem open_fs child_alloc_id key
 
@@ -1503,12 +1515,12 @@ module Make(B: EXTBLOCK)(P: SUPERBLOCK_PARAMS) : (S with type disk = B.t) = stru
       let seen1 = ref seen in
       let lwt_queue = ref [] in
       (* The range from start inclusive to end_ exclusive *)
-      KeyedMap.iter_range start end_ (fun k va -> (match _value_at open_fs.filesystem va with Some v -> callback k v|None ->() ); seen1 := KeyedSet.add k !seen1)
-      entry.logdata.logdata_contents;
+      KeyedMap.iter_range (fun k va -> (match _value_at open_fs.filesystem va with Some v -> callback k v|None ->() ); seen1 := KeyedSet.add k !seen1)
+      entry.logdata.logdata_contents start end_ ;
       (* As above, but end at end_ inclusive *)
-      KeyedMap.iter_inclusive_range start end_ (fun key1 offset ->
+      KeyedMap.iter_inclusive_range (fun key1 offset ->
         lwt_queue := (key1, offset)::!lwt_queue)
-      @@ Lazy.force entry.children;
+      (Lazy.force entry.children) start end_ ;
       Lwt_list.iter_s (fun (key1, offset) ->
           let%lwt child_alloc_id, _ce =
             _preload_child open_fs alloc_id entry key1 offset in
