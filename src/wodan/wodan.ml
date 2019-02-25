@@ -172,16 +172,6 @@ let make_fanned_io_list size cstr =
 
 let _sb_io block_io = Cstruct.sub block_io 0 sizeof_superblock
 
-type statistics = {
-  mutable inserts : int;
-  mutable lookups : int;
-  mutable range_searches : int;
-  mutable iters : int
-}
-
-let default_statistics =
-  {inserts = 0; lookups = 0; range_searches = 0; iters = 0}
-
 type childlinks = {
   (* starts at block_size - sizeof_crc, if there are no children *)
   mutable childlinks_offset : int
@@ -324,7 +314,7 @@ type node_cache = {
   space_map : Bitv.t;
   scan_map : Bitv.t option;
   mutable freed_intervals : BlockIntervals.t;
-  statistics : statistics
+  statistics : Statistics.t
 }
 
 let bitv_create64 off bit =
@@ -957,8 +947,7 @@ struct
 
   let _log_statistics cache =
     let stats = cache.statistics in
-    Logs.info (fun m ->
-        m "Ops: %d inserts %d lookups" stats.inserts stats.lookups );
+    let () = Statistics.log stats in
     let logical_size = bitv_len64 cache.space_map in
     (* Don't count the superblock as a node *)
     Logs.debug (fun m -> m "Decreasing free_count to log stats");
@@ -1408,7 +1397,7 @@ struct
                 "Inconsistent value_end depth:%Ld expected:%d actual:%d \
                  inserts:%d"
                 depth !vend entry.logdata.value_end
-                fs.node_cache.statistics.inserts );
+                (Statistics.inserts fs.node_cache.statistics) );
           fail := true );
         ( match entry.flush_children with
         | Some di -> (
@@ -1768,7 +1757,7 @@ struct
   let insert root key value =
     (*Logs.debug (fun m -> m "insert");*)
     let stats = root.open_fs.node_cache.statistics in
-    stats.inserts <- succ stats.inserts;
+    Statistics.incr_inserts stats;
     _check_live_integrity root.open_fs root.root_key 0L;
     _reserve_insert root.open_fs root.root_key
       (_ins_req_space (InsValue value))
@@ -1823,12 +1812,12 @@ struct
 
   let lookup root key =
     let stats = root.open_fs.node_cache.statistics in
-    stats.lookups <- succ stats.lookups;
+    Statistics.incr_lookups stats;
     _lookup root.open_fs root.root_key key
 
   let mem root key =
     let stats = root.open_fs.node_cache.statistics in
-    stats.lookups <- succ stats.lookups;
+    Statistics.incr_lookups stats;
     _mem root.open_fs root.root_key key
 
   let rec _search_range open_fs alloc_id start end_ seen callback =
@@ -1866,7 +1855,7 @@ struct
   let search_range root start end_ callback =
     let seen = KeyedSet.empty in
     let stats = root.open_fs.node_cache.statistics in
-    stats.range_searches <- succ stats.range_searches;
+    Statistics.incr_range stats;
     _search_range root.open_fs root.root_key start end_ seen callback
 
   let rec _iter open_fs alloc_id callback =
@@ -1896,7 +1885,7 @@ struct
 
   let iter root callback =
     let stats = root.open_fs.node_cache.statistics in
-    stats.iters <- succ stats.iters;
+    Statistics.incr_iters stats;
     _iter root.open_fs root.root_key callback
 
   let _read_superblock fs =
@@ -2074,7 +2063,7 @@ struct
             fsid;
             next_logical_alloc = lroot;
             (* in use, but that's okay *)
-            statistics = default_statistics }
+            statistics = Statistics.empty }
         in
         let open_fs = {filesystem = fs; node_cache} in
         (* TODO add more integrity checking *)
@@ -2106,7 +2095,7 @@ struct
             dirty_count = 0L;
             fsid;
             next_logical_alloc = first_block_written;
-            statistics = default_statistics }
+            statistics = Statistics.empty }
         in
         let open_fs = {filesystem = fs; node_cache} in
         _format open_fs logical_size first_block_written fsid
