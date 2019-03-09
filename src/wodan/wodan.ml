@@ -705,8 +705,7 @@ struct
           | Result.Error _ ->
               raise ReadError
           | Result.Ok () ->
-              if not (Crc32c.cstruct_valid cstr) then
-                raise (BadCRC logical)
+              if not (Crc32c.cstruct_valid cstr) then raise (BadCRC logical)
               else (cstr, io_data) )
 
   let find_childlinks_offset cstr value_end =
@@ -744,7 +743,7 @@ struct
 
   let rec gen_childlink_offsets start =
     if start >= block_end then []
-    else start :: (gen_childlink_offsets (start + childlink_size))
+    else start :: gen_childlink_offsets (start + childlink_size)
 
   let compute_children entry =
     Logs.debug (fun m -> m "compute_children");
@@ -1621,8 +1620,8 @@ struct
               assert (Int64.compare depth 0L > 0);
               Logs.debug (fun m -> m "node splitting %Ld %Ld" depth alloc_id);
               (* Set split_path to prevent spill/split recursion; will split towards the root *)
-              reserve_insert fs parent_key (InsSpaceChild childlink_size)
-                true (Int64.pred depth)
+              reserve_insert fs parent_key (InsSpaceChild childlink_size) true
+                (Int64.pred depth)
               >>= fun () ->
               (* The parent _reserve_insert call may have split the root, causing the parent_key
                  to be updated *)
@@ -1861,8 +1860,7 @@ struct
                 raise BadVersion
               else if get_superblock_incompat_flags sb <> sb_required_incompat
               then raise BadFlags
-              else if not (Crc32c.cstruct_valid sb) then
-                raise (BadCRC 0L)
+              else if not (Crc32c.cstruct_valid sb) then raise (BadCRC 0L)
               else if
                 get_superblock_block_size sb <> Int32.of_int P.block_size
               then (
@@ -2037,8 +2035,15 @@ struct
         Bitv64.set space_map 0L true;
         let freed_intervals = BlockIntervals.empty in
         let free_count = Int64.pred logical_size in
-        let first_block_written = Nocrypto.Rng.Int64.gen_r 1L logical_size in
-        let fsid = Cstruct.to_string (Nocrypto.Rng.generate 16) in
+        let first_block_written =
+          Int64.(
+            add
+              (rem
+                 (Cstruct.BE.get_uint64 (Mirage_random_stdlib.generate 8) 0)
+                 (sub logical_size 1L))
+              1L)
+        in
+        let fsid = Cstruct.to_string (Mirage_random_stdlib.generate 16) in
         let node_cache =
           { lru = lru_create mount_options.cache_size;
             flush_root = None;

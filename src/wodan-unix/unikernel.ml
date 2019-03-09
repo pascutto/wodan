@@ -67,9 +67,9 @@ module Client (B : Wodan.EXTBLOCK) = struct
             | [k; v] ->
                 compl :=
                   ( try%lwt
-                          Stor.insert root
-                            (Stor.key_of_string (Base64.decode_exn k))
-                            (Stor.value_of_string (Base64.decode_exn v))
+                      Stor.insert root
+                        (Stor.key_of_string (Base64.decode_exn k))
+                        (Stor.value_of_string (Base64.decode_exn v))
                     with Wodan.NeedsFlush ->
                       let%lwt _gen = Stor.flush root in
                       Lwt.return_unit )
@@ -160,9 +160,10 @@ module Client (B : Wodan.EXTBLOCK) = struct
                  time0 := Unix.gettimeofday ();
                  let should_continue = ref true in
                  while%lwt !should_continue do
-                   let key = Stor.key_of_cstruct (Nocrypto.Rng.generate 20)
+                   let key =
+                     Stor.key_of_cstruct (Mirage_random_stdlib.generate 20)
                    and cval =
-                     Stor.value_of_cstruct (Nocrypto.Rng.generate 40)
+                     Stor.value_of_cstruct (Mirage_random_stdlib.generate 40)
                    in
                    ( try%lwt
                        ios := succ !ios;
@@ -182,7 +183,14 @@ module Client (B : Wodan.EXTBLOCK) = struct
                        should_continue := false;
                        Lwt.return_unit )
                    >>= fun () ->
-                   if%lwt Lwt.return (Nocrypto.Rng.Int.gen 16384 = 0) then (
+                   if%lwt
+                     Lwt.return
+                       ( Cstruct.BE.get_uint16
+                           (Mirage_random_stdlib.generate 4)
+                           0
+                         mod 16384
+                       = 0 )
+                   then (
                      (* Infrequent re-opening *)
                        Stor.flush !root
                      >>= function
@@ -195,7 +203,14 @@ module Client (B : Wodan.EXTBLOCK) = struct
                          assert (gen3 = gen4);
                          Lwt.return () )
                    else
-                     if%lwt Lwt.return (false && Nocrypto.Rng.Int.gen 8192 = 0)
+                     if%lwt
+                       Lwt.return
+                         ( false
+                         && Cstruct.BE.get_uint16
+                              (Mirage_random_stdlib.generate 4)
+                              0
+                            mod 8192
+                            = 0 )
                      then (
                        (* Infrequent flushing *)
                        Stor.log_statistics !root;
@@ -242,13 +257,13 @@ module Client (B : Wodan.EXTBLOCK) = struct
       let%lwt info = Ramdisk.get_info disk in
       Lwt.return (disk, info)
     in
-    Nocrypto_entropy_unix.initialize ();
+    let%lwt () = Mirage_random_stdlib.initialize () in
     let disk, info = Lwt_main.run (init ()) in
     let data =
       let rec gen count =
         if count = 0 then []
         else
-          ( Stor.key_of_cstruct (Nocrypto.Rng.generate Stor.P.key_size),
+          ( Stor.key_of_cstruct (Mirage_random_stdlib.generate Stor.P.key_size),
             Stor.value_of_string (String.make value_size '\x00') )
           :: gen (pred count)
       in
@@ -273,7 +288,7 @@ module Client (B : Wodan.EXTBLOCK) = struct
         (fun () -> Lwt_main.run (iter ()))
         ()
     in
-    ()
+    Lwt.return_unit
 
   let bench () = bench0 10_000
 

@@ -45,7 +45,7 @@ module StrHash = Hashtbl.Make (struct
 end)
 
 let run () =
-  let%lwt () = Nocrypto_entropy_lwt.initialize () in
+  let%lwt () = Mirage_random_stdlib.initialize () in
   Logs.info (fun m -> m "Loading Wodan repo");
   let%lwt wodan_repo = Wodan_S.Repo.v wodan_config in
   Logs.info (fun m -> m "Loading Git repo");

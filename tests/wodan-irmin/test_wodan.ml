@@ -36,6 +36,6 @@ let clean () =
   S.Repo.v config >>= fun repo ->
   S.Repo.branches repo >>= Lwt_list.iter_p (S.Branch.remove repo)
 
-let init () = Nocrypto_entropy_lwt.initialize ()
+let init () = Mirage_random_stdlib.initialize ()
 let stats = None
 let suite = { Irmin_test.name = "WODAN"; init; clean; config; store; stats }

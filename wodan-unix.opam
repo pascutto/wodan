@@ -44,7 +44,6 @@ depends: [
   "lwt_ppx"
   "mirage-block-ramdisk"
   "mirage-block-unix"
-  "nocrypto"
   "wodan"
 ]
 

@@ -36,33 +36,33 @@ let dump copts _prefix =
   Lwt_main.run
     ( Block.connect copts.disk
     >>= fun bl ->
-    Nocrypto_entropy_lwt.initialize () >>= fun _nc -> Unikernel1.dump bl )
+    Mirage_random_stdlib.initialize () >>= fun _nc -> Unikernel1.dump bl )
 
 let restore copts =
   Lwt_main.run
     ( Block.connect copts.disk
     >>= fun bl ->
-    Nocrypto_entropy_lwt.initialize () >>= fun _nc -> Unikernel1.restore bl )
+    Mirage_random_stdlib.initialize () >>= fun _nc -> Unikernel1.restore bl )
 
 let format copts key_size block_size =
   Lwt_main.run
     ( Block.connect copts.disk
     >>= fun bl ->
-    Nocrypto_entropy_lwt.initialize ()
+    Mirage_random_stdlib.initialize ()
     >>= fun _nc -> Unikernel1.format bl key_size block_size )
 
 let trim copts =
   Lwt_main.run
     ( Block.connect copts.disk
     >>= fun bl ->
-    Nocrypto_entropy_lwt.initialize ()
+    Mirage_random_stdlib.initialize ()
     >>= fun _nc -> Unikernel1.trim bl >|= ignore )
 
 let exercise copts block_size =
   Lwt_main.run
     ( Block.connect copts.disk
     >>= fun bl ->
-    Nocrypto_entropy_lwt.initialize ()
+    Mirage_random_stdlib.initialize ()
     >>= fun _nc -> Unikernel1.exercise bl block_size >|= ignore )
 
 let bench _copts =
@@ -200,7 +200,8 @@ let bench_cmd =
       `P "Run a micro-benchmark that does bulk insertions without flushing."
     ]
   in
-  (Term.(const bench $ copts_t), Term.info "bench" ~doc ~man)
+  bench copts_t
+  >|= fun bench -> (Term.(const bench), Term.info "bench" ~doc ~man)
 
 let fuzz_cmd =
   let doc = "Fuzz a filesystem" in
@@ -234,6 +235,8 @@ let default_cmd =
     Term.info "wodanc" ~doc ~sdocs ~exits )
 
 let cmds =
+  bench_cmd
+  >|= fun bench_cmd ->
   [ restore_cmd;
     dump_cmd;
     format_cmd;
@@ -243,4 +246,6 @@ let cmds =
     fuzz_cmd;
     help_cmd ]
 
-let () = Term.(exit (eval_choice default_cmd cmds))
+let () =
+  Lwt_main.run
+    (cmds >|= fun cmds -> Term.(exit (eval_choice default_cmd cmds)))
