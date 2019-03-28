@@ -45,7 +45,6 @@ depends: [
   "mirage-types-lwt" {>= "3.0.5"}
   "nocrypto"
   "ppx_cstruct"
-  "rresult"
   "sexplib"
   "stdcompat"
 ]

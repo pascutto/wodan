@@ -288,13 +288,15 @@ functor
       Log.debug (fun l -> l "CA.find %a" (Irmin.Type.pp K.t) k);
       DB.Stor.lookup (DB.db_root db)
         (DB.Stor.key_of_string (Irmin.Type.to_bin_string K.t k))
-      >>= function
+      >|= function
       | None ->
-          Lwt.return_none
-      | Some v ->
-          Lwt.return_some
-            (Rresult.R.get_ok
-               (Irmin.Type.of_bin_string V.t (DB.Stor.string_of_value v)))
+          None
+      | Some v -> (
+        match Irmin.Type.of_bin_string V.t (DB.Stor.string_of_value v) with
+        | Ok va ->
+            Some va
+        | Error _ ->
+            None )
 
     let mem db k =
       Log.debug (fun l -> l "CA.mem %a" (Irmin.Type.pp K.t) k);
@@ -342,13 +344,15 @@ functor
       Log.debug (fun l -> l "AO.find %a" (Irmin.Type.pp K.t) k);
       DB.Stor.lookup (DB.db_root db)
         (DB.Stor.key_of_string (Irmin.Type.to_bin_string K.t k))
-      >>= function
+      >|= function
       | None ->
-          Lwt.return_none
-      | Some v ->
-          Lwt.return_some
-            (Rresult.R.get_ok
-               (Irmin.Type.of_bin_string V.t (DB.Stor.string_of_value v)))
+          None
+      | Some v -> (
+        match Irmin.Type.of_bin_string V.t (DB.Stor.string_of_value v) with
+        | Ok va ->
+            Some va
+        | Error _ ->
+            None )
 
     let mem db k =
       Log.debug (fun l -> l "AO.mem %a" (Irmin.Type.pp K.t) k);
@@ -416,12 +420,18 @@ functor
       Stor.value_of_string (Irmin.Type.to_bin_string K.t k)
 
     let key_of_inner_val va =
-      Rresult.R.get_ok
-        (Irmin.Type.of_bin_string K.t (Stor.string_of_value va))
+      match Irmin.Type.of_bin_string K.t (Stor.string_of_value va) with
+      | Ok res ->
+          res
+      | Error _ ->
+          raise (Invalid_argument "key_of_inner_val")
 
     let val_of_inner_val va =
-      Rresult.R.get_ok
-        (Irmin.Type.of_bin_string V.t (Stor.string_of_value va))
+      match Irmin.Type.of_bin_string V.t (Stor.string_of_value va) with
+      | Ok res ->
+          res
+      | Error _ ->
+          raise (Invalid_argument "val_of_inner_val")
 
     let inner_val_to_inner_key va =
       Stor.key_of_string
@@ -484,7 +494,8 @@ functor
         db.magic_key <- Stor.next_key db.magic_key;
         Lwt.return_unit )
       else Lwt.return_unit )
-      >>= fun () -> may_autoflush db (fun () -> Stor.insert (db_root db) ik iv)
+      >>= fun () ->
+      may_autoflush db (fun () -> Stor.insert (db_root db) ik iv)
 
     let set db k va =
       Log.debug (fun m -> m "AW.set -> %a" (Irmin.Type.pp K.t) k);

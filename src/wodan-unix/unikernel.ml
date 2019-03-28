@@ -233,14 +233,15 @@ module Client (B : Wodan.EXTBLOCK) = struct
     let value_size = 400 in
     let disk_size = 32 * 1024 * 1024 in
     let init () =
-      let%lwt disk_res =
-        Ramdisk.create ~name:"bench"
-          ~size_sectors:Int64.(div (of_int disk_size) 512L)
-          ~sector_size:512
-      in
-      let disk = Rresult.R.get_ok disk_res in
-      let%lwt info = Ramdisk.get_info disk in
-      Lwt.return (disk, info)
+      Ramdisk.create ~name:"bench"
+        ~size_sectors:Int64.(div (of_int disk_size) 512L)
+        ~sector_size:512
+      >|= (function
+            | Ok res ->
+                res
+            | Error _ ->
+                raise (Invalid_argument "Ramdisk.create") )
+      >>= fun disk -> Ramdisk.get_info disk >|= fun info -> (disk, info)
     in
     Nocrypto_entropy_unix.initialize ();
     let disk, info = Lwt_main.run (init ()) in
