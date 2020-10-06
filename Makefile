@@ -1,4 +1,3 @@
-
 build:
 	dune build
 	ln -sf _build/default/src/wodan-unix/wodanc.exe wodanc
@@ -6,12 +5,7 @@ build:
 deps:
 	opam install -t --deps-only .
 
-sync:
-	git submodule sync --recursive
-	git submodule update --init --recursive
-
 ocamlformat:
-	# Use ocamlformat=0.11.0
 	dune build @fmt --auto-promote
 
 fuzz:
@@ -29,6 +23,7 @@ uninstall:
 	dune uninstall
 
 clean:
-	rm -rf _build wodanc
+	dune clean
+	rm -f wodanc
 
 .PHONY: build deps ocamlformat fuzz test install uninstall clean
