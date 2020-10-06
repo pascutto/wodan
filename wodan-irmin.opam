@@ -23,7 +23,7 @@ build: [
 ]
 
 depends: [
-  "ocamlfind" {build}
+  "ocaml"
   "dune"  {>= "1.7"}
 
   "alcotest" {with-test}

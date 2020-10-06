@@ -23,7 +23,7 @@ build: [
 ]
 
 depends: [
-  "ocamlfind" {build}
+  "ocaml" {>= "4.08.0"}
   "dune"  {>= "1.7"}
 
   "alcotest" {with-test}
@@ -46,10 +46,8 @@ depends: [
   "lwt_ppx"
   "mirage-block" {>= "2.0.0"}
   "nocrypto"
+  "optint"
   "ppx_cstruct"
-  "rresult"
-  "stdcompat"
-  "ocaml" {>= "4.07.0"}
 ]
 
 pin-depends: [
