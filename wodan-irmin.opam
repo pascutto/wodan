@@ -8,16 +8,24 @@ name: "wodan-irmin"
 synopsis: "Wodan as an Irmin store"
 
 build: [
-  ["dune" "build" "-p" name "-j" jobs]
-  ["dune" "runtest" "-p" name "-j" jobs] {with-test}
-  ["dune" "build" "@fmt" "-p" name ] {with-test}
+  ["dune" "subst"] {pinned}
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@runtest" {with-test}
+    "@doc" {with-doc}
+  ]
 ]
 
 depends: [
   "ocamlfind" {build}
   "dune"  {>= "1.7"}
 
-  "ocamlformat" {with-test}
   "alcotest" {with-test}
   "bos" {with-test}
   "cstruct" {with-test}

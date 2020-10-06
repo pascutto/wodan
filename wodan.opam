@@ -8,16 +8,24 @@ name: "wodan"
 synopsis: "A flash-friendly, safe and flexible filesystem library"
 
 build: [
-  ["dune" "build" "-p" name ]
-  ["dune" "runtest" "-p" name "-j" jobs] {with-test}
-  ["dune" "build" "@fmt" "-p" name ] {with-test}
+  ["dune" "subst"] {pinned}
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@runtest" {with-test}
+    "@doc" {with-doc}
+  ]
 ]
 
 depends: [
   "ocamlfind" {build}
   "dune"  {>= "1.7"}
 
-  "ocamlformat" {with-test & = "0.15.0"}
   "alcotest" {with-test}
   "bos" {with-test}
   "ezjsonm" {with-test}
